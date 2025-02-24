@@ -1,0 +1,8 @@
+# Ignore bigger data- and extract-files
+*.csv
+*.zip
+*dump.sql
+
+# Ignore temporary/system files
+*~*
+.DS_Store
