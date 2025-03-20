@@ -6,3 +6,6 @@
 # Ignore temporary/system files
 *~*
 .DS_Store
+
+# Ignore credentials
+*credentials*
