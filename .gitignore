@@ -9,3 +9,6 @@
 
 # Ignore credentials
 *credentials*
+
+# Ignore config file
+config.json
