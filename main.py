@@ -7,13 +7,14 @@ def main():
         "api": helper.load_param_from_config("google_sheets_api"),
     }
 
-    result = helper.get_hyperlinks_from_google_spreadsheet(
+    metadata_links_list = helper.get_hyperlinks_from_google_spreadsheet(
         config["id"],
         config["range"],
         config["api"],
         'credentials_google_service_acc.json'
     )
-    print(result)
+    
+    helper.scrape_links_from_list([link['url'] for link in metadata_links_list])
 
 if __name__ == "__main__":
     main()
