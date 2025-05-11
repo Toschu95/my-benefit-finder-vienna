@@ -12,3 +12,6 @@
 
 # Ignore config file
 config.json
+
+# Ignore data
+/data/

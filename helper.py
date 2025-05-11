@@ -4,6 +4,7 @@ from googleapiclient.discovery import build
 from bs4 import BeautifulSoup
 import requests
 import re
+import os
 
 def load_param_from_config(param_name):
   """ Load a certain parameter from the config.json file."""
@@ -59,7 +60,7 @@ def get_hyperlinks_from_google_spreadsheet(spreadsheet_id, range, api, credentia
 
                 # If only one link in cell
                 if "hyperlink" in value:
-                    metadata_link["url name"] = text_parts[0]
+                    metadata_link["url name"] = text_parts[0].strip()
                     metadata_link["url"] = value["hyperlink"]
                     add_unique_link(metadata_links_list, metadata_link)
 
@@ -70,16 +71,46 @@ def get_hyperlinks_from_google_spreadsheet(spreadsheet_id, range, api, credentia
                             metadata_link['url'] = run["format"]["link"]["uri"]
 
                             # Ensuring existence of label
-                            metadata_link['url name'] = text_parts[i] if i < len(text_parts) else f"Link_{i+1}"
+                            metadata_link['url name'] = text_parts[i] if i < len(text_parts) else f"Link_{i+1}".strip()
 
                             add_unique_link(metadata_links_list, metadata_link)
     return metadata_links_list
 
-def scrape_links_from_list(links_list):
-    """Scrape links from a list of URLs."""
+def get_filename_for_webcontent(link_dict):
+    """Generate a filename for web content based on the link dictionary."""
+    prefix = link_dict.get("url").split("//")[-1].split(".at")[0].replace("www.", "").replace(".", "_")
+    # remove all special characters from the prefix
+    prefix = re.sub(r"\s+", " ", prefix)
+    prefix = re.sub(r"[^a-zA-Z0-9]", "_", prefix)
+    
+    suffic = link_dict.get("url name")
+    # remove all special characters from the suffix
+    suffic = re.sub(r"\s+", " ", suffic)
+    suffic = re.sub(r"[^a-zA-Z0-9]", "_", suffic)
+    
+    name = f"{prefix}_{suffic}"[:50]
+    return f"{name}.json"
+
+def save_webcontent_as_json(link_dict, path="data/raw/web/"):
+    """Save web content as a JSON file."""
+    filename = path + get_filename_for_webcontent(link_dict)
+    # if filename already exists, append a number to the filename
+    if os.path.exists(filename):
+        base, ext = os.path.splitext(filename)
+        i = 1
+        while os.path.exists(filename):
+            filename = f"{base}_{i}{ext}"
+            i += 1
+    with open(filename, 'w') as f:
+        json.dump(link_dict, f, ensure_ascii=False, indent=4)
+    print(f"Web content saved to {filename}.")
+
+def scrape_links_from_list(links_with_metadata:list):
+    """Scrape links from a list of dicts incl. URLs."""
     success = 0
     failded = 0
-    for link in links_list:
+    for link_dict in links_with_metadata:
+        link = link_dict.get("url")
         if link.startswith("http"):
             # If the link is a valid URL, scrape it
             response = requests.get(link)
@@ -92,5 +123,20 @@ def scrape_links_from_list(links_list):
             soup = BeautifulSoup(html, "html.parser")
             text = soup.get_text()
             cleaned = re.sub(r"\s+", " ", text)
+            link_dict["inhalt"] = cleaned
+            # Save the web content as JSON
+            save_webcontent_as_json(link_dict)
             success += 1
-    print(f"Successfully scraped {success} out of {len(links_list)} links.")
+    print(f"Successfully scraped {success} out of {len(links_with_metadata)} links.")
+
+def combine_all_json_in_path_to_one(path="data/raw/web/"):
+    """Combine all JSON files in a directory into one."""
+    combined_data = []
+    for filename in os.listdir(path):
+        if filename.endswith(".json"):
+            with open(os.path.join(path, filename), 'r') as f:
+                data = json.load(f)
+                combined_data.append(data)
+    with open(os.path.join(path, 'combined.json'), 'w') as f:
+        json.dump(combined_data, f, ensure_ascii=False, indent=4)
+    print(f"Combined {len(combined_data)} JSON files into one.")
