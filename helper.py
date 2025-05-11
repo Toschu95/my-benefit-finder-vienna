@@ -27,8 +27,8 @@ def parse_metadata(col_idx, cell_text):
     }
     return {keys[col_idx]: cell_text} if col_idx in keys else {}
 
-def get_hyperlinks_from_google_spreadsheet(spreadsheet_id, range, api, credentials_path):
-    """ Retrieve hyperlinks from a Google Sheets document."""
+def query_google_spreadsheet(spreadsheet_id, range, api, credentials_path):
+    """Query a Google Sheets document."""
     # Set up Google API
     creds = google.auth.load_credentials_from_file(credentials_path, [api,])[0]
     service = build("sheets", "v4", credentials=creds)
@@ -40,41 +40,82 @@ def get_hyperlinks_from_google_spreadsheet(spreadsheet_id, range, api, credentia
         fields="sheets.data.rowData.values"
     ).execute()
     
+    return result.get("sheets", [])[0].get("data", [])[0].get("rowData", [])
+
+def get_hyperlinks_from_google_spreadsheet(spreadsheet_id, range, api, credentials_path):
+    """ Retrieve hyperlinks from a Google Sheets document."""
+    # Query the Google Sheets document
+    result = query_google_spreadsheet(spreadsheet_id, range, api, credentials_path)
+    
     # List to store unique hyperlinks
-    metadata_links_list = []
+    data_list = []
 
     # Iterate over all rows in the API response
-    for i, row in enumerate(result.get("sheets", [])[0].get("data", [])[0].get("rowData", [])):
+    for i, row in enumerate(result):
         if "values" in row:
-            metadata_link = {"datenquelle" : "öffentlich verfügbare website"}
+            # crate data and add first metadata
+            data = {"datenquelle" : "öffentlich verfügbare website"}
             # iterratore over all columns in the row
             for col_idx, value in enumerate(row["values"]):
-                # get cell value
+                # get cell value and skip if empty
                 cell_text = value.get("formattedValue", "").strip()  # Get full cell text
+                if not cell_text:
+                    continue
 
+                # add more metadata
                 metadata = parse_metadata(col_idx, cell_text)
-                metadata_link.update(metadata)
+                data.update(metadata)
 
                 # preformat cell text for link processing
                 text_parts = cell_text.split("\n") if cell_text else []  # Split labels by newlines
 
                 # If only one link in cell
                 if "hyperlink" in value:
-                    metadata_link["url name"] = text_parts[0].strip()
-                    metadata_link["url"] = value["hyperlink"]
-                    add_unique_link(metadata_links_list, metadata_link)
+                    data["url name"] = text_parts[0].strip()
+                    data["url"] = value["hyperlink"]
+                    add_unique_link(data_list, data)
 
                 # If multiple links in one cell
                 if "textFormatRuns" in value:
                     for i, run in enumerate(value["textFormatRuns"]):
                         if "format" in run and "link" in run["format"]:
-                            metadata_link['url'] = run["format"]["link"]["uri"]
+                            data['url'] = run["format"]["link"]["uri"]
 
                             # Ensuring existence of label
-                            metadata_link['url name'] = text_parts[i] if i < len(text_parts) else f"Link_{i+1}".strip()
+                            data['url name'] = text_parts[i] if i < len(text_parts) else f"Link_{i+1}".strip()
 
-                            add_unique_link(metadata_links_list, metadata_link)
-    return metadata_links_list
+                            add_unique_link(data_list, data)
+    return data_list
+
+def load_internal_documentation_from_google_spreadsheet(spreadsheet_id, range, api, credentials_path):
+    """Retrieve documentation from a Google Sheets document."""
+    # Query the Google Sheets document
+    result = query_google_spreadsheet(spreadsheet_id, range, api, credentials_path)
+    
+    # List to store unique hyperlinks
+    data_list = []
+    # Iterate over all rows in the API response
+    for row in result:
+        if "values" in row:
+            # get cell documentation and skip if empty
+            docu = row["values"][5].get("formattedValue", "").strip()  # Get full cell text
+            if not docu:
+                continue
+            
+            # create data
+            data = {"inhalt" : docu}
+            
+            # add metadata
+            data.update({
+                "personen id": row["values"][0].get("formattedValue", "").strip(),
+                "datenquelle" : "interne dokumentation sozialberatung"
+            })
+
+            # append metadata to list
+            data_list.append(data)
+
+    # Save the documentation as JSON
+    save_internal_documentation_as_json(data_list)
 
 def get_filename_for_webcontent(link_dict):
     """Generate a filename for web content based on the link dictionary."""
@@ -129,14 +170,39 @@ def scrape_links_from_list(links_with_metadata:list):
             success += 1
     print(f"Successfully scraped {success} out of {len(links_with_metadata)} links.")
 
-def combine_all_json_in_path_to_one(path="data/raw/web/"):
-    """Combine all JSON files in a directory into one."""
+def combine_all_json_in_path_to_one(path="data/raw/web/", output_filename="webcontent.json"):
+    """Combine all JSON files in a directory into one, then delete the originals including old output."""
+
+    output_path = os.path.join(path, output_filename)
+
+    # Delete old combined file if it exists
+    if os.path.exists(output_path):
+        os.remove(output_path)
+        print(f"Deleted existing file: {output_filename}")
+
     combined_data = []
+
     for filename in os.listdir(path):
-        if filename.endswith(".json"):
-            with open(os.path.join(path, filename), 'r') as f:
+        file_path = os.path.join(path, filename)
+
+        # Skip the output file (e.g., if generated between runs)
+        if filename.endswith(".json") and filename != output_filename:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 combined_data.append(data)
-    with open(os.path.join(path, 'combined.json'), 'w') as f:
+
+            # Remove the original file
+            os.remove(file_path)
+
+    # Save the combined output
+    with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(combined_data, f, ensure_ascii=False, indent=4)
-    print(f"Combined {len(combined_data)} JSON files into one.")
+
+    print(f"Combined and removed {len(combined_data)} JSON files into {output_filename}.")
+
+def save_internal_documentation_as_json(documentation_list, path="data/raw/internal_documentation/"):
+    """Save documentation as a JSON file."""
+    filename = path + "internal_documentation.json"
+    with open(filename, 'w') as f:
+        json.dump(documentation_list, f, ensure_ascii=False, indent=4)
+    print(f"Documentation saved to {filename}.")
