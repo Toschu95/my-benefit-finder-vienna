@@ -1,30 +1,21 @@
 import helper
 
 def main():
-    config = {
-        "id": helper.load_param_from_config("google_spreadsheet_id_doku"),
-        "range": helper.load_param_from_config("google_spreadsheet_range_doku"),
-        "api": helper.load_param_from_config("google_sheets_api"),
-    }
-
-    """
-    links_list = helper.get_hyperlinks_from_google_spreadsheet(
-        config["id"],
-        config["range"],
-        config["api"],
-        'credentials_google_service_acc.json'
+    helper.init_database_public_information(
+        helper.load_param_from_config("google_spreadsheets", "links", "spreadsheet_id"),
+        helper.load_param_from_config("google_spreadsheets", "links", "range"),
+        helper.load_param_from_config("google_sheets_api"),
+        'credentials_google_service_acc.json',
+        helper.load_param_from_config("google_spreadsheets", "links", "update")
     )
     
-    helper.scrape_links_from_list(links_list)"""
-
-    helper.combine_all_json_in_path_to_one()
-
-    """ helper.load_internal_documentation_from_google_spreadsheet(
-        config["id"],
-        config["range"],
-        config["api"],
-        'credentials_google_service_acc.json'
-    ) """
+    helper.init_database_internal_documentation(
+        helper.load_param_from_config("google_spreadsheets", "doku", "spreadsheet_id"),
+        helper.load_param_from_config("google_spreadsheets", "doku", "range"),
+        helper.load_param_from_config("google_sheets_api"),
+        'credentials_google_service_acc.json',
+        helper.load_param_from_config("google_spreadsheets", "doku", "update")
+    )
 
 if __name__ == "__main__":
     main()

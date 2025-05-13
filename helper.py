@@ -4,13 +4,20 @@ from googleapiclient.discovery import build
 from bs4 import BeautifulSoup
 import requests
 import re
-import os
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain.schema import Document
 
-def load_param_from_config(param_name):
-  """ Load a certain parameter from the config.json file."""
-  with open('config.json') as f:
-    data = json.load(f)
-  return data[param_name]
+
+def load_param_from_config(*args):
+    """ Load a certain parameter from the config.json file."""
+    with open('config.json') as f:
+        result = json.load(f)
+
+    for param_name in args:
+        result = result.get(param_name)
+    return result
 
 def add_unique_link(metadata_links_list, metadata):
     """Add a unique link to the list if it does not already exist."""
@@ -114,40 +121,17 @@ def load_internal_documentation_from_google_spreadsheet(spreadsheet_id, range, a
             # append metadata to list
             data_list.append(data)
 
-    # Save the documentation as JSON
-    save_internal_documentation_as_json(data_list)
+    return data_list
 
-def get_filename_for_webcontent(link_dict):
-    """Generate a filename for web content based on the link dictionary."""
-    prefix = link_dict.get("url").split("//")[-1].split(".at")[0].replace("www.", "").replace(".", "_")
-    # remove all special characters from the prefix
-    prefix = re.sub(r"\s+", " ", prefix)
-    prefix = re.sub(r"[^a-zA-Z0-9]", "_", prefix)
-    
-    suffic = link_dict.get("url name")
-    # remove all special characters from the suffix
-    suffic = re.sub(r"\s+", " ", suffic)
-    suffic = re.sub(r"[^a-zA-Z0-9]", "_", suffic)
-    
-    name = f"{prefix}_{suffic}"[:50]
-    return f"{name}.json"
-
-def save_webcontent_as_json(link_dict, path="data/raw/web/"):
+def save_webcontent_as_json(data:list, path="data/raw/web/webcontent.json"):
     """Save web content as a JSON file."""
-    filename = path + get_filename_for_webcontent(link_dict)
-    # if filename already exists, append a number to the filename
-    if os.path.exists(filename):
-        base, ext = os.path.splitext(filename)
-        i = 1
-        while os.path.exists(filename):
-            filename = f"{base}_{i}{ext}"
-            i += 1
-    with open(filename, 'w') as f:
-        json.dump(link_dict, f, ensure_ascii=False, indent=4)
-    print(f"Web content saved to {filename}.")
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+    print(f"Public infomration saved to {path}.")
 
 def scrape_links_from_list(links_with_metadata:list):
     """Scrape links from a list of dicts incl. URLs."""
+    data = []
     success = 0
     failded = 0
     for link_dict in links_with_metadata:
@@ -165,44 +149,96 @@ def scrape_links_from_list(links_with_metadata:list):
             text = soup.get_text()
             cleaned = re.sub(r"\s+", " ", text)
             link_dict["inhalt"] = cleaned
-            # Save the web content as JSON
-            save_webcontent_as_json(link_dict)
+
             success += 1
+            data.append(link_dict)
     print(f"Successfully scraped {success} out of {len(links_with_metadata)} links.")
 
-def combine_all_json_in_path_to_one(path="data/raw/web/", output_filename="webcontent.json"):
-    """Combine all JSON files in a directory into one, then delete the originals including old output."""
+    return data
 
-    output_path = os.path.join(path, output_filename)
-
-    # Delete old combined file if it exists
-    if os.path.exists(output_path):
-        os.remove(output_path)
-        print(f"Deleted existing file: {output_filename}")
-
-    combined_data = []
-
-    for filename in os.listdir(path):
-        file_path = os.path.join(path, filename)
-
-        # Skip the output file (e.g., if generated between runs)
-        if filename.endswith(".json") and filename != output_filename:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                combined_data.append(data)
-
-            # Remove the original file
-            os.remove(file_path)
-
-    # Save the combined output
-    with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(combined_data, f, ensure_ascii=False, indent=4)
-
-    print(f"Combined and removed {len(combined_data)} JSON files into {output_filename}.")
-
-def save_internal_documentation_as_json(documentation_list, path="data/raw/internal_documentation/"):
+def save_internal_documentation_as_json(data:list, path="data/raw/internal_documentation/internal_documentation.json"):
     """Save documentation as a JSON file."""
-    filename = path + "internal_documentation.json"
-    with open(filename, 'w') as f:
-        json.dump(documentation_list, f, ensure_ascii=False, indent=4)
-    print(f"Documentation saved to {filename}.")
+    with open(path, 'w') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+    print(f"Internal documentation saved to {path}.")
+
+def text_splitter_with_metadata(data:list, chunk_size=500, overlap=0.2):
+    """Split text into chunks with metadata."""
+    
+    # Config splitter
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_size * overlap,
+    )
+
+    # Split dicts in list
+    documents = []
+
+    for entry in data:
+        if "inhalt" not in entry:
+            continue 
+
+        chunks = text_splitter.split_text(entry["inhalt"])
+        
+        # Use all other keys as metadata
+        metadata = {k: v for k, v in entry.items() if k != "inhalt"}
+        
+        for chunk in chunks:
+            doc = Document(
+                page_content=chunk,
+                metadata=metadata.copy()
+            )
+            documents.append(doc)
+
+    return documents
+
+def create_vectorstore_from_documents(documents, database_name, persist_directory="data/vectorstore/"):
+    """Create a vectorstore from documents."""
+    # Create embeddings
+    embedding = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+        )
+
+    # Create vectorstore
+    chroma_db = Chroma.from_documents(
+        documents=documents,
+        embedding=embedding,
+        persist_directory=persist_directory + database_name,
+    )
+
+    chroma_db.persist()
+    print(f"✅ Vectorstore {database_name} created and persisted.")
+
+def init_database_public_information(spreadsheet_id, range, api, credentials_path, update="true"):
+    """Initialize the public database."""
+    if update.lower() == "true":
+        print('for real')
+        links_with_metadata = get_hyperlinks_from_google_spreadsheet(spreadsheet_id, range, api, credentials_path)
+
+        data = scrape_links_from_list(links_with_metadata)
+
+        save_webcontent_as_json(data)
+    else:
+        with open("data/raw/web/webcontent.json", "r") as f:
+            data = json.load(f)
+
+    documents = text_splitter_with_metadata(data)
+
+    create_vectorstore_from_documents(documents, "public_information")
+
+def init_database_internal_documentation(spreadsheet_id, range, api, credentials_path, update="true"):
+    """Initialize the internal documentation database."""
+    if update.lower() == "true":
+        data = load_internal_documentation_from_google_spreadsheet(spreadsheet_id, range, api, credentials_path)
+        
+        save_internal_documentation_as_json(data)
+    else:
+        with open("data/raw/internal_documentation/internal_documentation.json", "r") as f:
+            data = json.load(f)
+
+    documents = text_splitter_with_metadata(data)
+
+    create_vectorstore_from_documents(documents, "internal_documentation")
+
+# Nur EINE Vectordatenbank erstellen aus allen verfügbaren Daten
+# Hash und Doppelcheck einfügen
