@@ -22,12 +22,12 @@ def load_param_from_config(*args):
         result = result.get(param_name)
     return result
 
-def add_unique_link(all_data, data):
+def add_unique_link(all_data: list, data: dict):
     """Add a unique link to the list if it does not already exist."""
     if data['url'] not in [all_data['url'] for data in all_data]:
         all_data.append(data.copy())
 
-def parse_metadata(col_idx, cell_text):
+def parse_metadata(col_idx: int, cell_text: str):
     """Parse metadata based on column index."""
     keys = {
         0: "kategorie intern",
@@ -37,7 +37,7 @@ def parse_metadata(col_idx, cell_text):
     }
     return {keys[col_idx]: cell_text} if col_idx in keys else {}
 
-def query_google_spreadsheet(spreadsheet_id, range, api, credentials_path):
+def query_google_spreadsheet(spreadsheet_id: str, range: str, api: str, credentials_path: str):
     """Query a Google Sheets document."""
     # Set up Google API
     creds = google.auth.load_credentials_from_file(credentials_path, [api,])[0]
@@ -52,7 +52,13 @@ def query_google_spreadsheet(spreadsheet_id, range, api, credentials_path):
     
     return result.get("sheets", [])[0].get("data", [])[0].get("rowData", [])
 
-def get_hyperlinks_from_google_spreadsheet(spreadsheet_id, range, api, credentials_path, base_metadata):
+def get_hyperlinks_from_google_spreadsheet(
+        spreadsheet_id: str,
+        range: str,
+        api: str,
+        credentials_path: str,
+        base_metadata: dict
+        ):
     """ Retrieve hyperlinks from a Google Sheets document."""
     # Query the Google Sheets document
     result = query_google_spreadsheet(spreadsheet_id, range, api, credentials_path)
@@ -101,7 +107,13 @@ def get_hyperlinks_from_google_spreadsheet(spreadsheet_id, range, api, credentia
                             add_unique_link(all_data, data)
     return all_data
 
-def load_internal_documentation_from_google_spreadsheet(spreadsheet_id, range, api, credentials_path, base_metadata):
+def load_internal_documentation_from_google_spreadsheet(
+        spreadsheet_id: str,
+        range: str,
+        api: str,
+        credentials_path: str,
+        base_metadata: dict
+        ):
     """Retrieve documentation from a Google Sheets document."""
     # Query the Google Sheets document
     result = query_google_spreadsheet(spreadsheet_id, range, api, credentials_path)
@@ -134,15 +146,15 @@ def load_internal_documentation_from_google_spreadsheet(spreadsheet_id, range, a
 
     return data_list
 
-def save_data_as_json(data:list, data_name:str, data_path:str):
+def save_data_as_json(data: list, data_name: str, data_path: str):
     """Save content as a JSON file."""
     with open(f"{data_path}{data_name}.json", 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
     print(f"{data_name} saved.")
 
-def scrape_links_from_list(all_data:list):
+def scrape_links_from_list(all_data: list):
     """Scrape links from a list of dicts incl. URLs."""
-    data = []
+    all_data_updated = []
     success = 0
     failded = 0
     for data in all_data:
@@ -162,10 +174,10 @@ def scrape_links_from_list(all_data:list):
             data["inhalt"] = cleaned
 
             success += 1
-            data.append(data)
+            all_data_updated.append(data)
     print(f"Successfully scraped {success} out of {len(all_data)} links.")
 
-    return data
+    return all_data
 
 def hash_text(text: str):
     return hashlib.md5(text.strip().encode("utf-8")).hexdigest()
@@ -174,14 +186,8 @@ def get_current_date():
     """Get the current date."""
     return datetime.today().strftime("%Y-%m")
 
-def text_splitter_with_metadata(data:list, chunk_size:int, overlap:float):
+def text_splitter_with_metadata(splitter: callable, data: list):
     """Split text into chunks with metadata."""
-    
-    # Config splitter
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=int(chunk_size * overlap),
-    )
 
     # Split dicts in list
     documents = []
@@ -190,7 +196,7 @@ def text_splitter_with_metadata(data:list, chunk_size:int, overlap:float):
         if "inhalt" not in entry:
             continue
 
-        chunks = text_splitter.split_text(entry["inhalt"])
+        chunks = splitter.split_text(entry["inhalt"])
         base_metadata = {k: v for k, v in entry.items() if k != "inhalt"}
 
         for chunk in chunks:
@@ -236,7 +242,13 @@ def init_vectorstore(
     db.persist()
     print("✅ Empty ChromaDB initialized.")
 
-def load_public_information_from_google_spreadsheet(spreadsheet_id, range, api, credentials_path, base_metadata):
+def load_public_information_from_google_spreadsheet(
+        spreadsheet_id: str,
+        range: str,
+        api: str,
+        credentials_path: str,
+        base_metadata: dict
+        ):
     """Load public information from a Google Sheets document."""
     link_data = get_hyperlinks_from_google_spreadsheet(spreadsheet_id, range, api, credentials_path, base_metadata)
     data = scrape_links_from_list(link_data)
@@ -263,17 +275,16 @@ def delete_outdated_version(db: Chroma, version: str, base_metadata: dict):
         print(f"ℹ️ No old chunks for source '{base_metadata.values()}' found.")
 
 def add_documents_to_vectorstore(
-        spreadsheet_id,
-        range,
-        api,
-        credentials_path,
-        base_metadata,
-        load_function,
-        raw_data_name,
+        spreadsheet_id: str,
+        range: str,
+        api: str,
+        credentials_path: str,
+        base_metadata: dict,
+        load_function: callable,
+        raw_data_name: str,
         raw_data_path="data/raw/",
         update_raw_data="true",
-        chunk_size=500,
-        overlap=0.2,
+        splitter=RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=100),
         vectorstore_name="chroma_db",
         persist_directory="data/vectorstore/",
         model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
@@ -289,7 +300,7 @@ def add_documents_to_vectorstore(
             data = json.load(f)
 
     # Create documents
-    documents = text_splitter_with_metadata(data, chunk_size, overlap)
+    documents = text_splitter_with_metadata(splitter, data)
 
     # Load vectorestore
     db = load_or_create_vectorstore(persist_directory, vectorstore_name, model_name)
